@@ -42,7 +42,7 @@ final class TrustedTimeImpl {
     _syncEngine = SyncEngine(
       config: config,
       clock: clock,
-      observer: _ProxySyncObserver(() => _instance!._observers),
+      observer: _ProxySyncObserver(() => _observers),
       cache:
           _cache, // Shared cache between impl and engine for state propagation
     );
@@ -64,8 +64,8 @@ final class TrustedTimeImpl {
       store: AnchorStore(),
       clock: PlatformMonotonicClock(),
     );
-    await impl._bootstrap();
     _instance = impl;
+    await impl._bootstrap();
     _bgChannel.setMethodCallHandler(impl._handleBackgroundMethodCall);
     return impl;
   }
