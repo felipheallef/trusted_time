@@ -17,12 +17,12 @@ A high-integrity time engine that provides reliable timestamps immune to system 
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Sahad2701' => 'https://github.com/Sahad2701' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
+  s.source_files = 'trusted_time/Sources/trusted_time/**/*.swift'
   s.dependency 'FlutterMacOS'
 
   s.platform = :osx, '10.14'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'
 
-  s.resource_bundles = {'trusted_time_privacy' => ['Resources/PrivacyInfo.xcprivacy']}
+  s.resource_bundles = {'trusted_time_privacy' => ['trusted_time/Sources/trusted_time/PrivacyInfo.xcprivacy']}
 end
