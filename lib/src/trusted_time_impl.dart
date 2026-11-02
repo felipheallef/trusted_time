@@ -36,6 +36,7 @@ final class TrustedTimeImpl {
     required MonotonicClock clock,
   }) : _config = config,
        _store = store,
+       _clock = clock,
        _cache = ConsensusCache(),
        _syncClock = SyncClock(),
        _monitor = IntegrityMonitor(clock: clock) {
@@ -72,6 +73,7 @@ final class TrustedTimeImpl {
 
   final TrustedTimeConfig _config;
   final AnchorStore _store;
+  final MonotonicClock _clock;
   late final SyncEngine _syncEngine;
   final IntegrityMonitor _monitor;
   final ConsensusCache _cache;
@@ -213,7 +215,7 @@ final class TrustedTimeImpl {
     if (persisted != null) {
       final rebooted = await _monitor.checkRebootOnWarmStart(persisted);
       if (!rebooted) {
-        _applyAnchor(persisted);
+        await _applyAnchor(persisted);
         _trusted = true;
         _scheduleRefresh();
         if (_config.backgroundSyncInterval != null) {
@@ -262,7 +264,7 @@ final class TrustedTimeImpl {
     _retryTimer?.cancel();
     try {
       final anchor = await _syncEngine.sync();
-      _applyAnchor(anchor);
+      await _applyAnchor(anchor);
       if (_config.persistState) await _store.save(anchor);
       _trusted = true;
       _offlineLastUtcMs = anchor.networkUtcMs;
@@ -278,9 +280,14 @@ final class TrustedTimeImpl {
     }
   }
 
-  void _applyAnchor(TrustAnchor anchor) {
+  Future<void> _applyAnchor(TrustAnchor anchor) async {
+    final currentUptimeMs = await _clock.uptimeMs();
+    _syncClock.update(
+      anchor.uptimeMs,
+      anchor.wallMs,
+      currentUptimeMs: currentUptimeMs,
+    );
     _anchor = anchor;
-    _syncClock.update(anchor.uptimeMs, anchor.wallMs);
     _monitor.attach(anchor);
     _driftCalibrator.recordAnchor(anchor.wallMs, anchor.networkUtcMs);
   }

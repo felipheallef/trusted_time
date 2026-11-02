@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Restore persisted anchors using the hardware uptime elapsed since the saved
+  anchor, rather than restarting trusted time at the anchor's old UTC value.
+- Use Darwin's continuous monotonic clock so restored elapsed time includes
+  device sleep, matching the Android and Linux suspend-inclusive clocks.
+- Persist OS boot identity and require it to match before restoring trust.
+  This rejects anchors from a previous boot even when current uptime is larger.
+- Avoid a hang and unhandled secondary sync error when no time sources can be
+  queried.
+
+### Compatibility
+
+- Anchors saved before this change require one successful network sync before
+  they can be restored offline. Their last-known estimates remain available.
+- Boot identity uses Android's device-scoped Android ID and boot count, Darwin's
+  `kern.bootsessionuuid`, and Linux's kernel boot ID. If unavailable or unsupported
+  (including Windows and Web), startup requires a fresh sync; an unverifiable
+  persisted anchor is never marked trusted. Fresh network sync remains supported.
+
 ## [2.2.0]
 
 ### Dependencies & Critical Fixes

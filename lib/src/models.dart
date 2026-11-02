@@ -167,6 +167,7 @@ final class TrustAnchor {
     required this.uptimeMs,
     required this.wallMs,
     required this.uncertaintyMs,
+    this.bootId,
     this.authLevel = NtsAuthLevel.none,
     this.confidence = ConfidenceLevel.low,
   });
@@ -201,6 +202,7 @@ final class TrustAnchor {
         uptimeMs: json['uptimeMs'] as int,
         wallMs: json['wallMs'] as int,
         uncertaintyMs: json['uncertaintyMs'] as int,
+        bootId: json['bootId'] as String?,
         authLevel: authLevel,
         confidence: confidence,
       );
@@ -214,6 +216,9 @@ final class TrustAnchor {
 
   /// The device's monotonic uptime at the moment the consensus was reached.
   final int uptimeMs;
+
+  /// The OS boot identity associated with [uptimeMs], if available.
+  final String? bootId;
 
   /// The device's system wall-clock time at the moment the consensus was reached.
   final int wallMs;
@@ -248,6 +253,7 @@ final class TrustAnchor {
   Map<String, dynamic> toJson() => {
     'networkUtcMs': networkUtcMs,
     'uptimeMs': uptimeMs,
+    'bootId': bootId,
     'wallMs': wallMs,
     'uncertaintyMs': uncertaintyMs,
     'authLevel': authLevel.index,

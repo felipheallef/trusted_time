@@ -31,6 +31,19 @@ void main() {
 
       final anchor = TrustAnchor.fromJson(json);
       expect(anchor.confidence, ConfidenceLevel.none);
+      expect(anchor.bootId, isNull);
+    });
+
+    test('round-trips the boot identity', () {
+      const anchor = TrustAnchor(
+        networkUtcMs: 1000000,
+        uptimeMs: 50000,
+        bootId: 'boot-1',
+        wallMs: 1000000,
+        uncertaintyMs: 10,
+      );
+
+      expect(TrustAnchor.fromJson(anchor.toJson()).bootId, 'boot-1');
     });
 
     test('handles missing optional fields with safe defaults', () {

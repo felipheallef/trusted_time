@@ -239,6 +239,16 @@ static void method_call_cb(FlMethodChannel *channel, FlMethodCall *method_call,
     g_autoptr(FlValue) result = fl_value_new_string(version);
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
 
+  } else if (strcmp(method, "getBootId") == 0) {
+    g_autofree gchar *boot_id = nullptr;
+    if (g_file_get_contents("/proc/sys/kernel/random/boot_id", &boot_id, nullptr,
+                            nullptr)) {
+      g_autoptr(FlValue) result = fl_value_new_string(g_strstrip(boot_id));
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(result));
+    } else {
+      response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    }
+
   } else if (strcmp(method, "getUptimeMs") == 0) {
     // CLOCK_BOOTTIME is identical to CLOCK_MONOTONIC but also counts time
     // during which the system was suspended — essential for accurate uptime

@@ -160,13 +160,24 @@ final class IntegrityMonitor {
     }
   }
 
-  /// Verification check for reboots during warm-start (cache restoration).
+  /// Returns whether a persisted anchor must be rejected during warm start.
   ///
-  /// A reboot is confirmed if the current hardware uptime is less than the
-  /// uptime recorded when the cached anchor was established.
+  /// Restoration requires a matching OS boot identity and nondecreasing uptime.
+  /// Missing boot identity is treated as unverified, including legacy anchors.
   Future<bool> checkRebootOnWarmStart(TrustAnchor previousAnchor) async {
+    final clock = _clock;
+    if (previousAnchor.bootId == null ||
+        previousAnchor.bootId!.trim().isEmpty ||
+        clock is! BootIdentityClock) {
+      return true;
+    }
+    final currentBootId = await clock.bootId();
+    if (currentBootId == null || currentBootId != previousAnchor.bootId) {
+      return true;
+    }
     final currentUptime = await _clock.uptimeMs();
-    return currentUptime < previousAnchor.uptimeMs;
+    return previousAnchor.uptimeMs < 0 ||
+        currentUptime < previousAnchor.uptimeMs;
   }
 
   void _emit(IntegrityEvent event) {

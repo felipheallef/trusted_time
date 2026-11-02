@@ -257,12 +257,11 @@ final class SyncEngine {
     } catch (e) {
       _observer?.onSyncFailed(e);
       _syncAttempts++;
-      if (!completer.isCompleted) completer.completeError(e);
       rethrow;
     } finally {
       streamClosed = true;
       // Cancel subscription first to prevent hanging when controller closes
-      await streamSub?.cancel();
+      await (streamSub ?? sampleController.stream.listen(null)).cancel();
       await sampleController.close();
     }
   }
@@ -320,11 +319,14 @@ final class SyncEngine {
     }
 
     final uptimeMs = await _clock.uptimeMs();
+    final clock = _clock;
+    final bootId = clock is BootIdentityClock ? await clock.bootId() : null;
     final wallMs = DateTime.now().millisecondsSinceEpoch;
 
     return TrustAnchor(
       networkUtcMs: result.utc.millisecondsSinceEpoch,
       uptimeMs: uptimeMs,
+      bootId: bootId,
       wallMs: wallMs,
       uncertaintyMs: result.uncertaintyMs,
       authLevel: result.authLevel,

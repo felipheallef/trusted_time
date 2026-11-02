@@ -12,6 +12,7 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
             if (methodCall.method == 'getUptimeMs') return 42000;
+            if (methodCall.method == 'getBootId') return 'boot-1';
             return null;
           });
     });
@@ -25,6 +26,33 @@ void main() {
       final clock = PlatformMonotonicClock();
       final result = await clock.uptimeMs();
       expect(result, 42000);
+    });
+
+    test('bootId returns the platform boot identity', () async {
+      expect(await PlatformMonotonicClock().bootId(), 'boot-1');
+    });
+
+    test('bootId returns null for missing platform support', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+
+      expect(await PlatformMonotonicClock().bootId(), isNull);
+    });
+
+    test('bootId returns null when platform access is denied', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            throw PlatformException(code: 'ACCESS_DENIED');
+          });
+
+      expect(await PlatformMonotonicClock().bootId(), isNull);
+    });
+
+    test('bootId returns null for an empty identity', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async => '  ');
+
+      expect(await PlatformMonotonicClock().bootId(), isNull);
     });
 
     test('uptimeMs throws when platform returns null', () async {

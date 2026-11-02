@@ -6,6 +6,7 @@ import BackgroundTasks
 import FlutterMacOS
 import Foundation
 #endif
+import Darwin
 
 /// Unified entry point and event coordinator for the TrustedTime Darwin (iOS/macOS) plugin.
 ///
@@ -55,7 +56,23 @@ public class TrustedTimePlugin: NSObject, FlutterPlugin {
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
         case "getUptimeMs":
-            result(Int64(ProcessInfo.processInfo.systemUptime * 1000))
+            var timebase = mach_timebase_info_data_t()
+            mach_timebase_info(&timebase)
+            let uptimeMs = Double(mach_continuous_time()) * Double(timebase.numer)
+                / Double(timebase.denom) / 1_000_000
+            result(Int64(uptimeMs))
+        case "getBootId":
+            var size = 0
+            guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else {
+                result(nil)
+                return
+            }
+            var buffer = [CChar](repeating: 0, count: size)
+            guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0 else {
+                result(nil)
+                return
+            }
+            result(String(cString: buffer))
         case "enableBackgroundSync":
             #if os(iOS)
             let hours = (call.arguments as? [String: Any])?["intervalHours"] as? Int ?? 24

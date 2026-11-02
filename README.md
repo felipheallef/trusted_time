@@ -298,7 +298,7 @@ void main() {
 | Threat | Status | Mechanism |
 |--------|--------|-----------|
 | System clock manipulation by user | ✅ Protected | Monotonic anchoring |
-| Device reboot (clock reset) | ✅ Detected | Uptime comparison on warm start |
+| Device reboot (clock reset) | ✅ Detected | OS boot identity and uptime validation on warm start |
 | Single rogue NTP server | ✅ Mitigated | Marzullo consensus + quorum floor |
 | Correlated provider failure | ✅ Mitigated | Group diversity requirement |
 | On-path NTP spoofing (MITM) | ⚠️ Advisory | NTS advisory mode (full AEAD in v2.1.0) |
@@ -311,8 +311,16 @@ void main() {
 When `initialize()` is called:
 
 1. The last persisted `TrustAnchor` is loaded from encrypted platform storage (Android Keystore / iOS Keychain / Windows DPAPI / Linux libsecret).
-2. If the anchor is valid (device has not rebooted since it was written), time is available immediately — no network round-trip needed.
-3. A background sync begins: NTP, HTTPS, and NTS sources are queried in parallel. As samples arrive they are fed into Marzullo's algorithm. Once a stable, group-diverse quorum is reached, a new anchor is written.
+2. A saved anchor is restored only if its OS boot identity matches the current boot and hardware uptime has not moved backwards. The elapsed hardware uptime is included in the restored time; the system wall clock is not used for this calculation.
+3. If no verifiable anchor can be restored, NTP, HTTPS, and NTS sources are queried in parallel. As samples arrive they are fed into Marzullo's algorithm. Once a stable, group-diverse quorum is reached, a new anchor is written. A restored anchor is refreshed on the configured refresh interval.
+
+Anchors created before boot identity was persisted require a successful network
+sync after upgrading. Boot identity is supplied on Android, iOS/macOS, and Linux
+when OS access permits. If unavailable, including on Windows and Web, a persisted
+anchor cannot restore trust and initialization must establish a fresh network
+anchor. This intentionally fails closed instead of inferring a boot from the
+adjustable system wall clock. `initialize()` can still finish without trust if
+sync fails: check `isTrusted` before calling `now()`.
 
 After initialization, `TrustedTime.now()` is a pure arithmetic operation it adds the elapsed monotonic time since the anchor was captured to the anchor's UTC value. There is no I/O and no platform channel call per invocation.
 

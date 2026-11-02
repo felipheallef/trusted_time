@@ -28,6 +28,37 @@ void main() {
       expect(afterReset, lessThan(50));
     });
 
+    test('restored anchors include hardware time elapsed before restart', () {
+      clock.update(1000, 900000, currentUptimeMs: 3601000);
+
+      expect(clock.elapsedSinceAnchorMs(), inInclusiveRange(3600000, 3600100));
+    });
+
+    test('restored anchors continue advancing after restoration', () async {
+      clock.update(1000, 900000, currentUptimeMs: 61000);
+      final initialElapsed = clock.elapsedSinceAnchorMs();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(clock.elapsedSinceAnchorMs(), greaterThan(initialElapsed));
+    });
+
+    test('rejects uptime preceding the saved anchor', () {
+      expect(
+        () => clock.update(1000, 900000, currentUptimeMs: 999),
+        throwsArgumentError,
+      );
+    });
+
+    test('updating and disposing clear a restored elapsed offset', () {
+      clock.update(1000, 900000, currentUptimeMs: 61000);
+      clock.update(62000, 961000, currentUptimeMs: 62000);
+      expect(clock.elapsedSinceAnchorMs(), lessThan(100));
+
+      clock.update(1000, 900000, currentUptimeMs: 61000);
+      clock.dispose();
+      expect(clock.elapsedSinceAnchorMs(), 0);
+    });
+
     test('elapsed increases monotonically over time', () async {
       clock.update(500, DateTime.now().millisecondsSinceEpoch);
 

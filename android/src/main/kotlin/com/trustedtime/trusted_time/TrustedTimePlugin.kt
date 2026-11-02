@@ -2,6 +2,7 @@ package com.trustedtime.trusted_time
 
 import android.content.Context
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.work.*
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
@@ -37,6 +38,24 @@ class TrustedTimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "getUptimeMs" -> result.success(SystemClock.elapsedRealtime())
+            "getBootId" -> {
+                val bootId = try {
+                    val bootCount = Settings.Global.getInt(
+                        context.contentResolver, Settings.Global.BOOT_COUNT, -1
+                    )
+                    val deviceId = Settings.Secure.getString(
+                        context.contentResolver, Settings.Secure.ANDROID_ID
+                    )
+                    if (bootCount >= 0 && !deviceId.isNullOrEmpty()) {
+                        "android:$deviceId:$bootCount"
+                    } else {
+                        null
+                    }
+                } catch (_: SecurityException) {
+                    null
+                }
+                result.success(bootId)
+            }
             "enableBackgroundSync" -> {
                 val hours = call.argument<Int>("intervalHours") ?: 24
                 scheduleBackgroundSync(hours.toLong())
