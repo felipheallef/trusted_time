@@ -112,13 +112,10 @@ final class MarzulloEngine {
     }
 
     // Sort endpoints to find the densest overlap.
-    // In Marzullo's algorithm, for closed intervals, an 'upper' endpoint
-    // at time T should be processed before a 'lower' endpoint at time T
-    // to correctly count the depth at the point of overlap.
     endpoints.sort((a, b) {
       final cmp = a.timeMs.compareTo(b.timeMs);
       if (cmp != 0) return cmp;
-      return a.type == _EndpointType.upper ? -1 : 1;
+      return a.type.index.compareTo(b.type.index);
     });
 
     var bestUniqueOverlap = 0;
@@ -159,9 +156,8 @@ final class MarzulloEngine {
         // for the current best start
         if (bestStart != null && bestEnd == null && ep.timeMs >= bestStart) {
           final uniqueOverlap = activeSourceCounts.length;
-          if (uniqueOverlap < bestUniqueOverlap) {
-            // We've dropped below the best overlap, so the previous upper endpoint
-            // was the best end point
+          if (uniqueOverlap == bestUniqueOverlap &&
+              activeSourceCounts[ep.sample.sourceId] == 1) {
             bestEnd = ep.timeMs;
           }
         }

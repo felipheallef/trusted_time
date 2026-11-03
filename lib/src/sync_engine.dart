@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'domain/marzullo_engine.dart';
 import 'domain/time_sample.dart';
 import 'domain/time_source.dart';
@@ -58,6 +59,8 @@ final class SyncEngine {
         trustMode: _config.ntsTrustMode,
         customRoots: _config.ntsCustomRoots,
         timeoutMs: _config.ntsTimeoutMs,
+        clock: _clock,
+        oscillatorDriftFactor: _config.oscillatorDriftFactor,
         onStratumObserved: (s) =>
             _qualityTracker.setStratum('${TimeSource.prefixNts}$host', s),
       ),
@@ -73,6 +76,77 @@ final class SyncEngine {
   final _qualityTracker = SourceQualityTracker();
 
   int _syncAttempts = 0;
+  int _syncCycle = 0;
+
+  bool get _diagnosticsEnabled => kDebugMode && _config.enableDiagnostics;
+
+  void _log(int cycle, String message) {
+    if (_diagnosticsEnabled) {
+      debugPrint('[TrustedTime][sync=$cycle] $message');
+    }
+  }
+
+  void _logPopulation(
+    int cycle,
+    List<TimeSample> samples,
+    Map<String, int> receivedAtMs,
+  ) {
+    if (!_diagnosticsEnabled) return;
+    final valid = samples
+        .where(
+          (sample) =>
+              sample.uncertaintyMs >= 0 &&
+              sample.uncertaintyMs <= _config.maxAllowedUncertaintyMs,
+        )
+        .toList();
+    final required = (valid.length * _config.minQuorumRatio).ceil();
+    _log(
+      cycle,
+      'population retained=${samples.length} engineEligible=${valid.length} '
+      'requiredOverlap=$required minimumQuorum=${_config.minimumQuorum} '
+      'uniqueSources=${valid.map((sample) => sample.sourceId).toSet().length} '
+      'groups=${valid.map((sample) => sample.groupId).toSet().join(',')} '
+      'minGroupCount=${_config.minGroupCount} (confidence grading only)',
+    );
+    for (final sample in samples) {
+      _log(
+        cycle,
+        'retained source=${sample.sourceId} group=${sample.groupId} '
+        'utcMs=${sample.interval.midpoint} interval=${sample.interval} '
+        'uncertaintyMs=${sample.uncertaintyMs} '
+        'engineEligible=${valid.contains(sample)} '
+        'receivedAtSyncMs=${receivedAtMs[sample.sourceId]} '
+        'auth=${sample.authLevel.name}',
+      );
+    }
+    for (var firstIndex = 0; firstIndex < samples.length; firstIndex++) {
+      for (
+        var secondIndex = firstIndex + 1;
+        secondIndex < samples.length;
+        secondIndex++
+      ) {
+        final first = samples[firstIndex];
+        final second = samples[secondIndex];
+        final rawGap = max(
+          0,
+          max(first.interval.startMs, second.interval.startMs) -
+              min(first.interval.endMs, second.interval.endMs),
+        );
+        final midpointDelta =
+            second.interval.midpoint - first.interval.midpoint;
+        final receiptDelta =
+            receivedAtMs[second.sourceId]! - receivedAtMs[first.sourceId]!;
+        _log(
+          cycle,
+          'pair first=${first.sourceId} second=${second.sourceId} '
+          'alignedOverlap=${first.interval.startMs <= second.interval.endMs && second.interval.startMs <= first.interval.endMs} '
+          'alignedGapMs=$rawGap alignedMidpointDeltaMs=$midpointDelta '
+          'receiptDeltaMs=$receiptDelta '
+          'basisUptimeMs=${first.uptimeMs}',
+        );
+      }
+    }
+  }
 
   /// Executes a full synchronization cycle across all healthy sources.
   ///
@@ -80,24 +154,49 @@ final class SyncEngine {
   /// performs adaptive outlier filtering, and requires stability across
   /// multiple samples before finalizing an anchor.
   Future<TrustAnchor> sync() async {
+    final cycle = ++_syncCycle;
     _observer?.onSyncStarted();
     final swSync = Stopwatch()..start();
 
     final samples = <TimeSample>[];
+    final receivedAtMs = <String, int>{};
     final completer = Completer<TrustAnchor>();
     var streamClosed = false;
     StreamSubscription<TimeSample?>? streamSub;
     final sampleController = StreamController<TimeSample?>();
 
     try {
+      final referenceUptimeMs = await _clock.uptimeMs();
+      if (referenceUptimeMs < 0) {
+        throw TrustedTimeSyncException('Negative synchronization uptime.');
+      }
       final now = DateTime.now();
+      _log(
+        cycle,
+        'start configured=${_sources.length} '
+        'maxLatencyMs=${_config.maxLatency.inMilliseconds} '
+        'ntsTimeoutMs=${_config.ntsTimeoutMs} '
+        'minQuorumRatio=${_config.minQuorumRatio} '
+        'minimumQuorum=${_config.minimumQuorum} '
+        'maxAllowedUncertaintyMs=${_config.maxAllowedUncertaintyMs} '
+        'earlyExit=${_config.earlyExit}',
+      );
+      _log(cycle, 'referenceUptimeMs=$referenceUptimeMs');
 
       // Quality-ranked source ordering with starvation guard.
       // Sources that haven't been queried within _kStarvationCycles are always
       // included so their quality estimates remain fresh.
       final healthySources = _sources.where((s) {
         final until = _blacklistUntil[s.id];
-        return until == null || now.isAfter(until);
+        final healthy = until == null || now.isAfter(until);
+        if (!healthy) {
+          _log(
+            cycle,
+            'skip source=${s.id} reason=cooldown '
+            'remainingMs=${until.difference(now).inMilliseconds}',
+          );
+        }
+        return healthy;
       }).toList();
 
       final rankedIds = _qualityTracker.ranked(healthySources.map((s) => s.id));
@@ -111,6 +210,10 @@ final class SyncEngine {
       ];
 
       var pendingQueries = activeSources.length;
+      _log(
+        cycle,
+        'active=${activeSources.map((source) => source.id).join(',')}',
+      );
       if (pendingQueries == 0) {
         throw TrustedTimeSyncException(
           'All available time sources are currently in exponential cooldown due to persistent failures.',
@@ -129,9 +232,22 @@ final class SyncEngine {
         if (completer.isCompleted) return;
 
         if (sample != null) {
+          receivedAtMs[sample.sourceId] = swSync.elapsedMilliseconds;
+          _log(
+            cycle,
+            'sample source=${sample.sourceId} '
+            'receivedAtSyncMs=${swSync.elapsedMilliseconds} '
+            'utcMs=${sample.interval.midpoint} interval=${sample.interval} '
+            'uncertaintyMs=${sample.uncertaintyMs} '
+            'group=${sample.groupId} auth=${sample.authLevel.name}',
+          );
           // Filter samples with negative uncertainty early, before both Marzullo
           // and the anchor reduce. Negative uncertainty indicates clock errors.
           if (sample.uncertaintyMs < 0) {
+            _log(
+              cycle,
+              'reject source=${sample.sourceId} reason=negative-uncertainty',
+            );
             rejectedInvalid++;
             _observer?.onSourceFailed(
               sample.sourceId,
@@ -144,6 +260,7 @@ final class SyncEngine {
                 rejectedInvalid,
                 activeSources.length,
                 completer,
+                referenceUptimeMs,
               );
             }
             return;
@@ -163,6 +280,11 @@ final class SyncEngine {
             // likely malicious or experiencing extreme network jitter.
             if (sample.uncertaintyMs > max(medianU * 3, 500)) {
               samples.remove(sample);
+              _log(
+                cycle,
+                'exclude source=${sample.sourceId} reason=adaptive-outlier '
+                'uncertaintyMs=${sample.uncertaintyMs} medianUncertaintyMs=$medianU',
+              );
               _observer?.onSourceFailed(
                 sample.sourceId,
                 'Adaptive exclusion: statistical outlier detected',
@@ -171,7 +293,17 @@ final class SyncEngine {
           }
 
           final result = _engine.resolve(samples);
-          if (result != null) {
+          _log(
+            cycle,
+            result == null
+                ? 'resolve retained=${samples.length} result=no-consensus'
+                : 'resolve retained=${samples.length} '
+                      'participants=${result.participants.map((sample) => sample.sourceId).join(',')} '
+                      'interval=${result.interval} uncertaintyMs=${result.uncertaintyMs} '
+                      'confidence=${result.confidence.name}',
+          );
+          if (result != null &&
+              result.participantCount >= _config.minimumQuorum) {
             // Stability Check: Escalates quorum requirements if high variance
             // is detected, ensuring we don't anchor to a jittery consensus.
             final varianceDetected = samples.any(
@@ -195,7 +327,12 @@ final class SyncEngine {
               if (_config.earlyExit || samples.length == activeSources.length) {
                 swSync.stop();
                 unawaited(
-                  _completeSync(result, swSync.elapsedMilliseconds, completer),
+                  _completeSync(
+                    result,
+                    swSync.elapsedMilliseconds,
+                    completer,
+                    referenceUptimeMs,
+                  ),
                 );
               }
             }
@@ -209,6 +346,7 @@ final class SyncEngine {
             rejectedInvalid,
             activeSources.length,
             completer,
+            referenceUptimeMs,
             elapsedMs: swSync.elapsedMilliseconds,
           );
         }
@@ -217,13 +355,17 @@ final class SyncEngine {
       // 2. Launch racing queries
       for (final source in activeSources) {
         unawaited(
-          _querySafe(source)
+          _querySafe(source, cycle, swSync, referenceUptimeMs)
               .then((s) {
                 if (!streamClosed && !sampleController.isClosed) {
                   sampleController.add(s);
                 }
               })
               .catchError((Object e) {
+                _log(
+                  cycle,
+                  'query callback failed source=${source.id} error=$e',
+                );
                 _observer?.onSourceFailed(source.id, e);
                 if (!streamClosed && !sampleController.isClosed) {
                   sampleController.add(
@@ -240,8 +382,9 @@ final class SyncEngine {
           if (!completer.isCompleted &&
               samples.length >= _config.minimumQuorum) {
             final result = _engine.resolve(samples);
-            if (result != null) {
-              return _createAnchor(result);
+            if (result != null &&
+                result.participantCount >= _config.minimumQuorum) {
+              return _createAnchor(result, referenceUptimeMs);
             }
           }
           throw TrustedTimeSyncException(
@@ -253,8 +396,16 @@ final class SyncEngine {
       _syncAttempts = 0;
       _cache?.update(anchor);
       _qualityTracker.advanceCycle();
+      _log(
+        cycle,
+        'success elapsedMs=${swSync.elapsedMilliseconds} '
+        'utc=${DateTime.fromMillisecondsSinceEpoch(anchor.networkUtcMs, isUtc: true).toIso8601String()} '
+        'uncertaintyMs=${anchor.uncertaintyMs} auth=${anchor.authLevel.name}',
+      );
       return anchor;
     } catch (e) {
+      _logPopulation(cycle, samples, receivedAtMs);
+      _log(cycle, 'failed elapsedMs=${swSync.elapsedMilliseconds} error=$e');
       _observer?.onSyncFailed(e);
       _syncAttempts++;
       rethrow;
@@ -270,11 +421,12 @@ final class SyncEngine {
     ConsensusResult result,
     int latencyMs,
     Completer<TrustAnchor> completer,
+    int referenceUptimeMs,
   ) async {
     if (completer.isCompleted) return;
 
     try {
-      final anchor = await _createAnchor(result);
+      final anchor = await _createAnchor(result, referenceUptimeMs);
       _observer?.onConsensusReached(result);
 
       // Record quality observations for all participant samples.
@@ -308,7 +460,10 @@ final class SyncEngine {
     }
   }
 
-  Future<TrustAnchor> _createAnchor(ConsensusResult result) async {
+  Future<TrustAnchor> _createAnchor(
+    ConsensusResult result,
+    int referenceUptimeMs,
+  ) async {
     // Anchor selection validates that consensus has participant samples.
     // This prevents outliers from corrupting the monotonic clock reference.
     final participantSamples = result.participants;
@@ -318,17 +473,23 @@ final class SyncEngine {
       );
     }
 
-    final uptimeMs = await _clock.uptimeMs();
     final clock = _clock;
     final bootId = clock is BootIdentityClock ? await clock.bootId() : null;
+    final uptimeMs = await _clock.uptimeMs();
+    final elapsedMs = uptimeMs - referenceUptimeMs;
+    if (elapsedMs < 0) {
+      throw TrustedTimeSyncException('Monotonic clock regressed during sync.');
+    }
     final wallMs = DateTime.now().millisecondsSinceEpoch;
 
     return TrustAnchor(
-      networkUtcMs: result.utc.millisecondsSinceEpoch,
+      networkUtcMs: result.utc.millisecondsSinceEpoch + elapsedMs,
       uptimeMs: uptimeMs,
       bootId: bootId,
       wallMs: wallMs,
-      uncertaintyMs: result.uncertaintyMs,
+      uncertaintyMs:
+          result.uncertaintyMs +
+          (elapsedMs * _config.oscillatorDriftFactor).ceil(),
       authLevel: result.authLevel,
       confidence: result.confidence,
     );
@@ -339,7 +500,8 @@ final class SyncEngine {
     List<TimeSample> samples,
     int rejectedInvalid,
     int totalSources,
-    Completer<TrustAnchor> completer, {
+    Completer<TrustAnchor> completer,
+    int referenceUptimeMs, {
     int? elapsedMs,
   }) {
     if (completer.isCompleted) return;
@@ -347,8 +509,16 @@ final class SyncEngine {
     // All sources responded but we haven't reached stability.
     // Try one final resolve with all samples before failing.
     final finalResult = _engine.resolve(samples);
-    if (finalResult != null && samples.length >= _config.minimumQuorum) {
-      unawaited(_completeSync(finalResult, elapsedMs ?? 0, completer));
+    if (finalResult != null &&
+        finalResult.participantCount >= _config.minimumQuorum) {
+      unawaited(
+        _completeSync(
+          finalResult,
+          elapsedMs ?? 0,
+          completer,
+          referenceUptimeMs,
+        ),
+      );
     } else {
       // Improved quorum-failure messaging with accurate counts
       final eligibleCount = samples.length;
@@ -365,12 +535,49 @@ final class SyncEngine {
   }
 
   /// Wraps a source query with timeout and health-tracking logic.
-  Future<TimeSample?> _querySafe(TimeSource source) async {
+  Future<TimeSample?> _querySafe(
+    TimeSource source,
+    int cycle,
+    Stopwatch syncClock,
+    int referenceUptimeMs,
+  ) async {
+    final queryClock = Stopwatch()..start();
+    _log(cycle, 'query start source=${source.id}');
     try {
       final sample = await source.getTime().timeout(_config.maxLatency);
+      if (sample.interval.startMs > sample.interval.endMs) {
+        throw TrustedTimeSyncException('Sample has an inverted UTC interval.');
+      }
+      final observedUptimeMs = sample.uptimeMs ?? await _clock.uptimeMs();
+      if (observedUptimeMs < referenceUptimeMs) {
+        throw TrustedTimeSyncException(
+          'Sample uptime precedes sync reference.',
+        );
+      }
+      final shiftMs = observedUptimeMs - referenceUptimeMs;
+      final projectionErrorMs =
+          1 + (shiftMs * _config.oscillatorDriftFactor).ceil();
+      final aligned = TimeSample(
+        interval: TimeInterval(
+          startMs: sample.interval.startMs - shiftMs - projectionErrorMs,
+          endMs: sample.interval.endMs - shiftMs + projectionErrorMs,
+        ),
+        sourceId: sample.sourceId,
+        groupId: sample.groupId,
+        authLevel: sample.authLevel,
+        uptimeMs: referenceUptimeMs,
+      );
+      _log(
+        cycle,
+        'query success source=${source.id} '
+        'queryElapsedMs=${queryClock.elapsedMilliseconds} '
+        'receivedAtSyncMs=${syncClock.elapsedMilliseconds} '
+        'rawInterval=${sample.interval} observedUptimeMs=$observedUptimeMs '
+        'shiftMs=$shiftMs alignedInterval=${aligned.interval}',
+      );
       _sourceHealth[source.id] = 0; // Reset failure count on success
       _blacklistUntil.remove(source.id);
-      return sample;
+      return aligned;
     } catch (e) {
       _observer?.onSourceFailed(source.id, e);
       _qualityTracker.recordFailure(source.id);
@@ -380,6 +587,12 @@ final class SyncEngine {
       final cooldownMin = pow(2, min(score, 6)).toInt();
       _blacklistUntil[source.id] = DateTime.now().add(
         Duration(minutes: cooldownMin),
+      );
+      _log(
+        cycle,
+        'query failed source=${source.id} '
+        'queryElapsedMs=${queryClock.elapsedMilliseconds} '
+        'errorType=${e.runtimeType} error=$e cooldownMinutes=$cooldownMin',
       );
 
       return null;
@@ -398,6 +611,7 @@ final class SyncEngine {
   void dispose() {
     for (final source in _sources) {
       if (source is HttpsSource) source.dispose();
+      if (source is NtsSource) source.dispose();
     }
   }
 }

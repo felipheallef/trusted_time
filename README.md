@@ -37,6 +37,35 @@ A tamper-proof UTC clock for Flutter. `trusted_time` anchors network-verified ti
 
 ---
 
+## Temporary synchronization diagnostics
+
+Set `TrustedTimeConfig(enableDiagnostics: true, ...)` to emit debug-build-only
+`[TrustedTime][sync=N]` logs, including the first initialization sync. This is off
+by default and produces no diagnostic output in profile or release builds.
+
+The logs include configured deadlines, queried/skipped source IDs, source errors
+and cooldowns, response durations, UTC intervals, uncertainty, authentication
+levels, and the engine-eligible population. Query lines show raw intervals,
+observation uptime, projection shifts, and aligned intervals. Failed cycles
+compare aligned intervals at `basisUptimeMs`, rather than UTC observations taken
+at different instants. NTS delay and native-to-Dart lag are corrected before this
+projection; pairwise receipt differences are informational only.
+No NTS cookies, keys, root-certificate contents, or boot identities are logged.
+
+`minQuorumRatio` applies to samples remaining after uncertainty filtering. With
+two samples, the default `0.6` requires both to overlap. Lowering the ratio cannot
+repair disjoint intervals; a required overlap below two is explicitly rejected.
+`maxAllowedUncertaintyMs` filters samples, rather than widening their intervals.
+`minGroupCount` currently grades confidence, not a hard acceptance requirement.
+
+The outer `maxLatency` deadline also applies to NTS calls. Its default of four
+seconds can end a query before the default five-second `ntsTimeoutMs` expires.
+If diagnostics show deadline failures, test a larger outer deadline (for example,
+eight seconds with the five-second NTS budget unchanged). This does not fix
+timestamps measured at different instants or a blocked UDP time-service port.
+Source cooldowns persist across `forceResync()` calls; use a full app restart for
+a clean comparison. Disable diagnostics after collecting the failing cycle.
+
 ## Installation
 
 ```yaml
@@ -213,10 +242,22 @@ await TrustedTime.initialize(
 
 // Check whether the current anchor is NTS-authenticated
 print(TrustedTime.isSecure);     // true / false
-print(TrustedTime.authLevel);    // NtsAuthLevel.verified / advisory / none
+print(TrustedTime.authLevel);    // NtsAuthLevel.verified / none
 ```
 
-> **NTS implementation note:** This version uses a pure-Dart NTS-KE implementation. Full AEAD verification (AES-SIV-CMAC-256) requires native TLS exporter access that is not yet available in Dart's `SecureSocket` API. Samples negotiated via NTS are labelled `NtsAuthLevel.advisory` — they confirm the server is NTS-aware but do not provide full cryptographic authentication. Verified NTS is planned for v2.1.0 via an FFI path. See [ADR 0003](docs/adr/0003-nts-pure-dart-vs-rust.md) for the full rationale.
+The native implementation uses `nts ^10.0.1` with authenticated NTP replies.
+Its build hook requires Rust/rustup; Android builds require an installed NDK
+version 28 or newer. A native dependency upgrade requires a full app rebuild.
+Receipt timestamps are accepted only on the query's strict clock generation and
+backend. Network delay, native-to-Dart scheduling lag, root delay/dispersion, and
+clock sampling latency contribute to the UTC estimate and its bounds. Samples
+are then projected to one engine-uptime instant before quorum resolution. Quorum
+requirements are unchanged; no HTTP or unauthenticated fallback is added.
+
+Custom sources can stamp `TimeSample.uptimeMs` using the same `MonotonicClock`
+instance/domain as the engine. Never insert an unrelated library's monotonic
+timestamp directly. Unstamped custom sources are timestamped when the query
+returns and must return UTC intervals valid at that moment.
 
 ### Observability
 
@@ -246,6 +287,24 @@ TrustedTime.registerObserver(MySyncObserver());
 ---
 
 ## Testing
+
+Run `flutter test` for deterministic regressions. An opt-in native/network smoke
+test queries NTP.br, Cloudflare, and Netnod and requires authenticated consensus:
+
+```sh
+flutter test --dart-define=TRUSTED_TIME_LIVE_NTS=true \
+  --dart-define=NTS_NATIVE_LIBRARY=/absolute/trusted/path/to/libnts_rust.dylib \
+  test/nts_live_test.dart
+```
+
+This smoke test uses a process stopwatch only for its short, awake test run;
+it does not validate platform-channel clocks, sleep/resume, or persisted anchors.
+`flutter test` compiles the NTS library but does not provide the bridge's app
+bundle load path. Set `NTS_NATIVE_LIBRARY` to the current build hook's library
+under `.dart_tool/hooks_runner/shared/nts/` (`.so`/`.dll` on Linux/Windows).
+Use the exact dependency build and host architecture, not an old app's binary.
+It is skipped by default and requires outbound NTS-KE TCP 4460 and negotiated
+NTP UDP connectivity. Fully stop/rebuild applications after updating native NTS.
 
 Use `TrustedTime.overrideForTesting` to inject a deterministic mock in unit and widget tests. Tests do not need network access.
 
@@ -301,7 +360,7 @@ void main() {
 | Device reboot (clock reset) | ✅ Detected | OS boot identity and uptime validation on warm start |
 | Single rogue NTP server | ✅ Mitigated | Marzullo consensus + quorum floor |
 | Correlated provider failure | ✅ Mitigated | Group diversity requirement |
-| On-path NTP spoofing (MITM) | ⚠️ Advisory | NTS advisory mode (full AEAD in v2.1.0) |
+| On-path NTP spoofing (MITM) | ✅ With NTS-only configuration | Authenticated NTS replies; plain NTP/HTTPS remain unauthenticated |
 | Offline drift | ⚠️ Estimated | Monotonic projection with drift factor |
 
 ---

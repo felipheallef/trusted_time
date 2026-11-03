@@ -37,6 +37,30 @@ void main() {
       expect(engine.resolve([]), isNull);
     });
 
+    test('keeps the entire consensus inside the narrowest shared interval', () {
+      final result = engine.resolve([
+        createSample(id: 'wide', utc: baseTime, uncertaintyMs: 100),
+        createSample(id: 'tight', utc: baseTime, uncertaintyMs: 5),
+      ])!;
+      expect(result.interval!.startMs, baseMs - 5);
+      expect(result.interval!.endMs, baseMs + 5);
+      expect(result.participantCount, 2);
+    });
+
+    test('closed intervals can agree at one shared endpoint', () {
+      final result = engine.resolve([
+        createSample(id: 'first', utc: baseTime, uncertaintyMs: 5),
+        createSample(
+          id: 'second',
+          utc: baseTime.add(const Duration(milliseconds: 10)),
+          uncertaintyMs: 5,
+        ),
+      ])!;
+      expect(result.interval!.startMs, baseMs + 5);
+      expect(result.interval!.endMs, baseMs + 5);
+      expect(result.participantCount, 2);
+    });
+
     test('resolves consensus from two agreeing sources', () {
       final result = engine.resolve([
         createSample(id: 'a', utc: baseTime, uncertaintyMs: 10),

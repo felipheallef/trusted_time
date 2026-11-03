@@ -11,6 +11,7 @@ final class TimeSample {
     required this.sourceId,
     required this.groupId,
     this.authLevel = NtsAuthLevel.none,
+    this.uptimeMs,
   });
 
   /// The mathematical time interval.
@@ -24,6 +25,10 @@ final class TimeSample {
 
   /// The authentication level achieved for this specific sample.
   final NtsAuthLevel authLevel;
+
+  /// Hardware uptime at which [interval] is valid, on the engine clock's domain.
+  /// If omitted, the engine timestamps this observation when the query returns.
+  final int? uptimeMs;
 
   /// Helper to get the UTC time (midpoint of the interval).
   DateTime get utc =>

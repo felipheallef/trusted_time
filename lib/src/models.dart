@@ -58,6 +58,7 @@ final class TrustedTimeConfig {
     this.earlyExit = true,
     this.oscillatorDriftFactor = 0.00005,
     this.backgroundSyncInterval,
+    this.enableDiagnostics = false,
   });
 
   /// Creates a Web-compatible configuration that only uses HTTPS sources.
@@ -128,6 +129,9 @@ final class TrustedTimeConfig {
   /// The maximum amount of time the engine will wait for a response from any
   /// single source before it is discarded.
   final Duration maxLatency;
+
+  /// Emits per-source and quorum diagnostics in debug builds only.
+  final bool enableDiagnostics;
 
   /// The frequency at which the engine enters a proactive synchronization cycle
   /// while the app is in the foreground.

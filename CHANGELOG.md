@@ -2,8 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in, debug-build-only synchronization diagnostics covering per-source
+  failures, deadlines, cooldowns, sample intervals, filtering, and pairwise
+  receipt-time/interval comparisons, including the initial sync.
+
 ### Fixed
 
+- Upgrade `nts` from `^5.1.0` to `^10.0.1`, use its idempotent bridge bootstrap,
+  and create custom-trust clients only after native initialization.
+- Correct NTS transmit timestamps for network delay and native-to-Dart lag,
+  validating receipt clock generation/backend and bounding engine-clock sampling
+  latency without assuming the two monotonic clock origins are identical.
+- Align observations to one hardware-uptime instant before consensus, including
+  rounding/drift bounds, then advance UTC when creating the final anchor.
+- End consensus intersections at the correct upper endpoint, handle touching
+  closed intervals, and enforce `minimumQuorum` on actual agreeing participants.
 - Restore persisted anchors using the hardware uptime elapsed since the saved
   anchor, rather than restarting trusted time at the anchor's old UTC value.
 - Use Darwin's continuous monotonic clock so restored elapsed time includes
@@ -15,6 +30,10 @@
 
 ### Compatibility
 
+- The native NTS dependency changed: fully stop and rebuild running apps.
+- Custom `TimeSource` implementations may supply `TimeSample.uptimeMs` in the
+  engine's `MonotonicClock` domain; otherwise observation time is assigned when
+  their query returns. Intervals must describe UTC at that observation time.
 - Anchors saved before this change require one successful network sync before
   they can be restored offline. Their last-known estimates remain available.
 - Boot identity uses Android's device-scoped Android ID and boot count, Darwin's
